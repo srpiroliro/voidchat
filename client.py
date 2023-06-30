@@ -12,22 +12,6 @@ from os import mkdir
 
 
 
-
-
-
-
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-    
-
-    data=s
-    print(f"{data.decode()}")
-
-    
-
-        # data=s.recv(2024)
-        # if data: print(f" - {data.decode()}")
-
-
 class Client:
     HOST:str="127.0.0.1"
     PORT:int=1111
@@ -41,9 +25,8 @@ class Client:
     PUB_KEY_PATH:str=f"{KEYS_FOLDER}/public_key.pem"
     PRIV_KEY_PATH:str=f"{KEYS_FOLDER}/private_key.pem"
 
-    def __init__(self, socket:socket.socket)->None:
+    def __init__(self, socket:socket.socket=None)->None:
         self.socket=socket
-        self.connect()
     
     def gen_keys(self)->tuple[str]:
         if not exists(self.KEYS_FOLDER): 
@@ -159,10 +142,14 @@ class Client:
         )
         
 
-    def start(self):
-        while True:
-            message=input(" > ")
-            s.sendall(message.encode())
+    def start(self)->None:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            self.socket=s
+            self.connect()
+
+            while True:
+                message=input(" > ")
+                s.sendall(message.encode())
 
 
     
