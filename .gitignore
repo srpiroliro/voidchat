@@ -1,0 +1,7 @@
+*__pycahce__
+.vscode
+
+**.personal
+
+keys/
+**.pem
