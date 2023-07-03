@@ -1,4 +1,5 @@
 import base64
+from queue import Queue
 import rsa, socket, time, json
 from os.path import exists
 from os import mkdir
@@ -35,11 +36,12 @@ class Client:
 	PUB_KEY_PATH:str=f"{KEYS_FOLDER}/public_key.pem"
 	PRIV_KEY_PATH:str=f"{KEYS_FOLDER}/private_key.pem"
 
-	HASH_METHOD="SHA-512"
+	HASH_METHOD:str="SHA-512"
 
 	def __init__(self)->None:
-		self.chats={}
-		self.connected=False
+		self.chats:dict={}
+		self.current_chat:str|None=None
+		self.connected:bool=False
 
 		self.start()
 
@@ -54,11 +56,17 @@ class Client:
 		self.connected=False
 		return None
 	
-	def receive(self, raw_data:str):
-		data:dict=json.loads(raw_data)
-		sender_key=rsa.PublicKey.load_pkcs1(bytes.fromhex(data["s"]),"DER")
+	def receive(self, raw_message_data:str):
+		message_data:dict=json.loads(raw_message_data)
 
-	
+		sender_key=rsa.PublicKey.load_pkcs1(bytes.fromhex(message_data["s"]),"DER")
+		data:dict=json.loads(
+			self.decrypt(message_data["da"]))
+		
+		self.verify(data["txt"], bytes.fromhex(data["sg"]), sender_key)
+		
+		if sender_key not in self.chats: self.chats[sender_key]=Queue()
+		self.chats[sender_key].put(data)
 
 	def send(self, receiver_key:str|None, text:str)->None:
 		sender_key:str=self.public_key.save_pkcs1("DER").hex()
@@ -94,29 +102,26 @@ class Client:
 		except: return False
 			
 	def sign(self, message:str)->str:
-		return rsa.sign(message.encode(), self.private_key, self.HASH_METHOD).hex()
-	
-	# TODO: implement.
+		hashed_message=rsa.compute_hash(message.encode(), self.HASH_METHOD)
+		return rsa.sign_hash(hashed_message, self.private_key, self.HASH_METHOD).hex()
+
 	def verify(self, message, signature, pub_key)->bool:
 		try:
-			rsa.verify(message, signature, pub_key)
-			return True
+			return rsa.verify(message, signature, pub_key)==self.HASH_METHOD
 		except Exception: return False
 
 	def encrypt(self, receivers_pub_key, content:str)->str:
 		return self.__encrypt_with_key(receivers_pub_key, content)
 
-	def decrypt(self, sender_pub_key, content:str)->str:
-		return self.__decrypt_with_key(sender_pub_key, content)
-
 	def __encrypt_with_key(self, key, content:str)->str:
 		if not key: return content
-
 		cipher:bytes=rsa.encrypt(content.encode(self.ENCODING),key)
 		return base64.b64encode(cipher).decode()
 
-	def __decrypt_with_key(self, key, content:str)->str:
-		return rsa.decrypt(base64.b64decode(content.encode(self.ENCODING)), key).decode()
+	def decrypt(self, content:str)->str:
+		return rsa.decrypt(
+				base64.b64decode(content.encode(self.ENCODING)), 
+				self.private_key).decode()
 
 
 
