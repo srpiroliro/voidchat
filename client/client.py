@@ -5,7 +5,21 @@ from os import mkdir
 from threading import Thread
 
 
-
+"""
+	Message structure:
+		{
+			"s": SENDER_PUB_KEY,
+			"de": DESTINATION_PUB_KEY,
+			"da": encrypted(
+				with=DESTINATION_PUB_KEY,
+				data={
+					"t": SECONDS_TIMESTAMP,
+					"txt": DATA,
+					"sg": SIGNATURE( of what? )
+				}
+			)
+		}
+"""
 
 class Client:
 	HOST:str="127.0.0.1"
@@ -42,14 +56,15 @@ class Client:
 	
 	def receive(self, raw_data:str):
 		data:dict=json.loads(raw_data)
-		receiver
+		sender_key=rsa.PublicKey.load_pkcs1(bytes.fromhex(data["s"]),"DER")
+
 	
 
 	def send(self, receiver_key:str|None, text:str)->None:
 		sender_key:str=self.public_key.save_pkcs1("DER").hex()
 		timestamp:float=time.time()
 
-		data:dict={"tmps":timestamp, "txt":text}
+		data:dict={"t":timestamp, "txt":text}
 		encrypted_data:str=self.encrypt(receiver_key, json.dumps(data))
 
 		components:dict={"s":sender_key, "de":receiver_key, "da":encrypted_data}
