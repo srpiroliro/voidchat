@@ -19,6 +19,7 @@ PEM_SUFFIX:str="\n-----END RSA PUBLIC KEY-----"
 
 unsent_chats:dict={} # saves unsent messages in a format to be resent straight up.
 clients:dict={}
+clients["tmp"]=[]
 
 
 class ClientThread(threading.Thread):
@@ -39,28 +40,30 @@ class ClientThread(threading.Thread):
 
 	def run(self)->None:
 		print("[NEW CONNECTION]:", self.addr)
-		self.send("[connected]")
 
-		self.__login()
+		self.connected=self.__login()
 
-		self.move()
-
-		self.__send_unsent_messages()
+		if self.connected:
+			self.move()
+			self.__send_unsent_messages()
 
 		while self.connected:
 			raw_data=self.conn.recv(MESSAGE_SIZE)
-			if not raw_data: break
+			if not raw_data: 
+				print("no data here")
+				break
 			data=raw_data.decode()
+			print("[received]:",data)
 
-			try:  source, destionation, _ = self.__parse_message(data)
+			try:  source, destionation, _ =self.__parse_message(data)
 			except Exception as e:  print(f"[ERROR ({self.addr})]: wrong message format ('{e}')")
 			else:
 				if destionation in clients: 
 					print(f"[RESENT TO '{destionation}' FROM '{source}']")
 					clients[destionation].resend(data)
 				else:
-					if destionation not in unsent_chats: 
-						unsent_chats[destionation]=Queue()
+					print("[ADDED TO QUEUE]")
+					if destionation not in unsent_chats:  unsent_chats[destionation]=Queue()
 					unsent_chats[destionation].put(data)
 
 		self.conn.close()
@@ -68,20 +71,17 @@ class ClientThread(threading.Thread):
 
 
 	def __parse_message(self, message:str)->tuple:
-		print("RECEIVED MESSAGE:",message)
 		json_message=json.loads(message)
 
-		return json_message["s"],json_message["de"], json_message["da"]
+		return json_message["s"], json_message["de"], json_message["da"]
 
-	def __login(self)->None:
+	def __login(self)->bool:
 		try:
-			self.send("login")
-
 			raw_data=self.conn.recv(MESSAGE_SIZE)
 			if not raw_data: self.connected=False
 			data=raw_data.decode(ENCODING)
 
-			source, destination, raw_message = self.__parse_message(data)
+			source, destination, raw_message=self.__parse_message(data)
 			message=json.loads(raw_message)
 
 			if not destination==None: raise Exception("incorrect destination")
@@ -89,17 +89,17 @@ class ClientThread(threading.Thread):
 
 		except Exception as e: 
 			print(f"[ERROR ({self.addr})]: {e}")
-			self.__login()
-		else: 
+			return False
+		else:
 			self.pub_key=source
-
 			self.conn.sendall("ok".encode())
+			return True
 
 		
 	def __verify_message(self, raw_pub_key:str, data:dict)->bool:
-		pub_key=rsa.PublicKey.load_pkcs1(f"{PEM_PREFIX}{raw_pub_key}{PEM_SUFFIX}".encode())
+		pub_key=rsa.PublicKey.load_pkcs1(bytes.fromhex(raw_pub_key), "DER")
 		try:
-			return rsa.verify(VERIFICATION_KEY.encode(), bytes.fromhex(data["s"]), pub_key) == HASH_METHOD
+			return rsa.verify(VERIFICATION_KEY.encode(), bytes.fromhex(data["txt"]), pub_key) == HASH_METHOD
 		except Exception as e:
 			print("Verification failed")
 
@@ -130,6 +130,6 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
 
 		thread=ClientThread(connection, address)
 		thread.start()
-		clients["tmp"]=thread
+		clients["tmp"].append(thread)
 
 		print(f"[ACTIVE CONNECTIONS]: {threading.active_count() - 1}")

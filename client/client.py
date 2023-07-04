@@ -9,8 +9,8 @@ from threading import Thread
 """
 	Message structure:
 		{
-			"s": SENDER_PUB_KEY,
-			"de": DESTINATION_PUB_KEY,
+			"s": SENDER_PUB_KEY_HEX,
+			"de": DESTINATION_PUB_KEY_HEX,
 			"da": encrypted(
 				with=DESTINATION_PUB_KEY,
 				data={
@@ -38,10 +38,11 @@ class Client:
 
 	HASH_METHOD:str="SHA-512"
 
-	def __init__(self)->None:
+	def __init__(self, sock:socket.socket|None=None)->None:
 		self.chats:dict={}
 		self.current_chat:str|None=None
 		self.connected:bool=False
+		self.socket=sock if sock else socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 		self.start()
 
@@ -51,8 +52,8 @@ class Client:
 
 	def listen(self)->str|None:
 		received:bytes=self.socket.recv(self.MESSAGE_SIZE)
-
 		if received: return received.decode(self.ENCODING)
+
 		self.connected=False
 		return None
 	
@@ -128,26 +129,19 @@ class Client:
 
 	def login(self)->None:
 		self.send(self.SERVER_KEY, self.sign(self.VERIFICATION_KEY))
-		if not self.listen()=="ok":
-			raise Exception("ERROR LOGGING IN")
-		
-
+		if not self.listen()=="ok":  raise Exception("ERROR LOGGING IN")
 
 	def start(self)->None:
-		if not self.load_keys():
-			self.gen_keys()
+		if not self.load_keys():  self.gen_keys()
 
-		with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-			self.socket=sock
-			self.connect()
+		self.connect()
+		self.login()
+		
+		listener:Thread=Thread(target=self.listener)
+		speaker:Thread=Thread(target=self.speaker)
 
-			self.login()
-
-			listener:Thread=Thread(target=self.listener)
-			speaker:Thread=Thread(target=self.speaker)
-
-			listener.start()
-			speaker.start()
+		listener.start()
+		speaker.start()
 
 	def listener(self)->None:
 		while self.connected:
@@ -158,6 +152,7 @@ class Client:
 		while self.connected:
 			message:str=input("> ")
 			self.socket.sendall(message.encode())
+
 
 
 if __name__=="__main__":
