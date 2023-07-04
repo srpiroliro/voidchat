@@ -17,7 +17,7 @@ ENCODING:str="utf-8"
 PEM_PREFIX:str="-----BEGIN RSA PUBLIC KEY-----\n"
 PEM_SUFFIX:str="\n-----END RSA PUBLIC KEY-----"
 
-unsent_chats:dict={} # saves unsent messages in a format to be resent straight up.
+unsent_chats:dict[str,Queue]={} # saves unsent messages in a format to be resent straight up.
 clients:dict={}
 clients["tmp"]=[]
 
@@ -29,7 +29,7 @@ class ClientThread(threading.Thread):
 		self.conn=connection
 		self.addr=address
 
-		self.pub_key=None
+		# self.pub_key=None
 		self.connected=True
 
 	def resend(self, data:bytes):
@@ -53,14 +53,13 @@ class ClientThread(threading.Thread):
 				print("no data here")
 				break
 			data=raw_data.decode()
-			print("[received]:",data)
 
 			try:  source, destionation, _ =self.__parse_message(data)
 			except Exception as e:  print(f"[ERROR ({self.addr})]: wrong message format ('{e}')")
 			else:
 				if destionation in clients: 
-					print(f"[RESENT TO '{destionation}' FROM '{source}']")
-					clients[destionation].resend(data)
+					print(f"[RESENT TO '0x{destionation[:6]}...' FROM '0x{source[:6]}...']")
+					clients[destionation].resend(raw_data)
 				else:
 					print("[ADDED TO QUEUE]")
 					if destionation not in unsent_chats:  unsent_chats[destionation]=Queue()
@@ -70,7 +69,7 @@ class ClientThread(threading.Thread):
 		print("[DISCONNECTED]")
 
 
-	def __parse_message(self, message:str)->tuple:
+	def __parse_message(self, message:str)->tuple[str,str,str]:
 		json_message=json.loads(message)
 
 		return json_message["s"], json_message["de"], json_message["da"]
@@ -91,7 +90,7 @@ class ClientThread(threading.Thread):
 			print(f"[ERROR ({self.addr})]: {e}")
 			return False
 		else:
-			self.pub_key=source
+			self.pub_key:str=source
 			self.conn.sendall("ok".encode())
 			return True
 
@@ -117,7 +116,9 @@ class ClientThread(threading.Thread):
 		
 		messages_queue=unsent_chats[self.pub_key]
 		while not messages_queue.empty():
-			self.resend(messages_queue.get())
+			self.resend(messages_queue.get().encode(ENCODING))
+
+		# self.send("done")
 
 
 print("[ ---  WELCOME  --- ]")
