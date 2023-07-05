@@ -36,22 +36,33 @@ class Client:
 	VERIFICATION_KEY:str="vChat"
 	SERVER_KEY:str|None=None
 
+	SIZE_NON_TEXT_MSG_COMPONENTS=56
+
 	KEY_SIZE:int=256
 	KEYS_FOLDER:str="keys"
 	PUB_KEY_PATH:str=f"{KEYS_FOLDER}/public_key.pem"
 	PRIV_KEY_PATH:str=f"{KEYS_FOLDER}/private_key.pem"
 
+	CHATS_FOLDER:str="chats"
+	OPENED_CHATS_JSON:str=f"{CHATS_FOLDER}/current.json"
+	UNREAD_CHATS_JSON:str=f"{CHATS_FOLDER}/unread.json"
+	CHAT_NAMES_JSON:str=f"{CHATS_FOLDER}/names.json"
+
 	HASH_METHOD:str="SHA-512"
 
 	MESSAGES_TO_LOAD=20
+
+	############################################
+	############################################
 
 	def __init__(self, sock:socket.socket|None=None)->None:
 		self.connected:bool=False
 
 		self.chats:dict[str, list]={} # all message history (including own msgs)
 		self.unread_chats:dict[str, Queue]={}
-
 		self.chat_alias:dict={}
+		self.__load_all_chat_data()
+
 		self.current_chat:str|None=None
 		
 		self.connected:bool=False
@@ -65,50 +76,13 @@ class Client:
 		self.commands:dict={
 			"delete": self.delete_chat,
 			"switch": self.pick_chat,
-			"rename": self.rename
+			"rename": self.rename,
+			"quit": self.quit
 		}
 
-	def connect(self)->None:
-		self.socket.connect((self.HOST, self.PORT))
-		self.connected=True
-
-	def listen(self)->str|None:
-		received:bytes=self.socket.recv(self.MESSAGE_SIZE)
-		if received: return received.decode(self.ENCODING)
-
-		self.connected=False
-		return None
-	
-	def receive(self)->tuple|None:
-		"""
-			returns: sender, text, timetsamp
-		"""
-
-		raw_message_data:str|None=self.listen()
-		if not raw_message_data: return
-
-		message_data:dict=json.loads(raw_message_data)
-
-		sender_key=rsa.PublicKey.load_pkcs1(bytes.fromhex(message_data["s"]),"DER")
-		data:dict=json.loads(
-			self.decrypt(message_data["da"]))
-		
-		self.verify(data["txt"], bytes.fromhex(data["sg"]), sender_key)
-		
-		return message_data["s"], data["txt"], data["t"]
-
-	def send(self, receiver_key:str|None, text:str)->None:
-		sender_key:str=self.public_key.save_pkcs1("DER").hex()
-		timestamp:float=time.time()
-
-		data:dict={"t":timestamp, "txt":text, "sg": self.sign(text)}
-		encrypted_data:str=self.encrypt(receiver_key, json.dumps(data))
-
-		components:dict={"s":sender_key, "de":receiver_key, "da":encrypted_data}
-		encrypted_message:str=json.dumps(components)
-
-		self.socket.sendall(encrypted_message.encode(self.ENCODING))
-
+	############################################ 
+					# KEYS #
+	############################################
 	
 	def gen_keys(self)->None:
 		if not exists(self.KEYS_FOLDER): 
@@ -129,7 +103,72 @@ class Client:
 			
 			return True
 		except: return False
-			
+
+	############################################
+
+
+	############################################
+					# SOCKETS #
+	############################################
+
+	def connect(self)->bool:
+		try:
+			self.socket.connect((self.HOST, self.PORT))
+			self.connected=True
+			return True
+		except: 
+			print("[ SERVER IS DOWN ]")
+			return False
+
+	def listen(self)->str|None:
+		try:
+			received:bytes=self.socket.recv(self.MESSAGE_SIZE)
+			return received.decode(self.ENCODING)
+		except:
+			print("[ SERVER WAS LOST ]")
+			self.connected=False
+			return None
+	
+	def receive(self)->tuple|None|bool:
+		"""
+			returns: sender, text, timetsamp if data was recevied
+			reutrns False if sender key is wrong 
+
+		"""
+
+		raw_message_data:str|None=self.listen()
+		if not raw_message_data: return
+
+		message_data:dict=json.loads(raw_message_data)
+		sender_key=self.__regen_public_key(message_data["s"])
+		if not sender_key: return False
+
+		data:dict=json.loads(self.decrypt(message_data["da"]))
+		self.verify(data["txt"], bytes.fromhex(message_data["sg"]), sender_key)
+		
+		return message_data["s"], data["txt"], data["t"]
+
+	def send(self, receiver_key:str|None, text:str)->None:
+		sender_key:str=self.public_key.save_pkcs1("DER").hex()
+		timestamp:float=time.time()
+
+		data:dict={"t":timestamp,"txt":text}
+		encrypted_data:str|None=self.encrypt(receiver_key, json.dumps(data))
+		if not encrypted_data: return
+
+		components:dict={"s":sender_key, "de":receiver_key, "da":encrypted_data, "sg": self.sign(text)}
+		encrypted_message:str=json.dumps(components)
+
+		self.socket.sendall(encrypted_message.encode(self.ENCODING))
+
+	############################################
+
+
+
+	############################################ 
+					# CRYPTO #
+	############################################
+
 	def sign(self, message:str)->str:
 		hashed_message=rsa.compute_hash(message.encode(), self.HASH_METHOD)
 		return rsa.sign_hash(hashed_message, self.private_key, self.HASH_METHOD).hex()
@@ -139,27 +178,40 @@ class Client:
 			return rsa.verify(message, signature, pub_key)==self.HASH_METHOD
 		except Exception: return False
 
-	def encrypt(self, receivers_pub_key:str|None, content:str)->str:
+	def encrypt(self, receivers_pub_key:str|None, content:str)->str|None:
 		return self.__encrypt_with_key(receivers_pub_key, content)
-
-	def __encrypt_with_key(self, key:str|None, content:str)->str:
-		if not key: return content
-
-		receiver_key=rsa.PublicKey._load_pkcs1_der(bytes.fromhex(key))
-		cipher:bytes=rsa.encrypt(content.encode(self.ENCODING), receiver_key)
-
-		return base64.b64encode(cipher).decode()
 
 	def decrypt(self, content:str)->str:
 		return rsa.decrypt(
 				base64.b64decode(content.encode(self.ENCODING)), 
 				self.private_key).decode()
 
-	def login(self)->None:
-		self.send(self.SERVER_KEY, self.sign(self.VERIFICATION_KEY))
-		if not self.listen()=="ok":  raise Exception("ERROR LOGGING IN")
+	def __encrypt_with_key(self, key:str|None, content:str)->str|None:
+		if not key: return content
 
-	
+		receiver_key=self.__regen_public_key(key)
+		if not receiver_key: return None
+
+		cipher:bytes=rsa.encrypt(content.encode(self.ENCODING), receiver_key)
+		return base64.b64encode(cipher).decode()
+
+	def __regen_public_key(self, public_key:str)->rsa.PublicKey|None:
+		try: return rsa.PublicKey.load_pkcs1(bytes.fromhex(public_key),"DER")
+		except Exception: return None
+
+	############################################
+
+
+	############################################ 
+				# FUNCTIONALITY #
+	############################################
+
+	def login(self)->None:
+		try:
+			self.send(self.SERVER_KEY, self.sign(self.VERIFICATION_KEY))
+			assert self.listen()=="ok"
+		except Exception: raise Exception("LOGIN ERROR")
+
 	def pick_chat(self)->None: 
 		self.current_chat=None
 
@@ -186,12 +238,46 @@ class Client:
 
 		system(self.CLEAR_COMMAND)
 
-	# TODO: fix
+		self.__load_messages()
+
+	def delete_chat(self)->None:
+		if not self.current_chat: 
+			self.chats={}
+			self.unread_chats={}
+		else: self.chats[self.current_chat]=[]
+
+		self.pick_chat()
+
+	def rename(self)->None:
+		if not self.current_chat: 
+			print("Must be inside a chat.")
+			return
+		
+		new_name:str=input("[NEW NAME FOR CURRENT CHAT]: ")
+		if new_name in self.chat_alias.values(): 
+			print("Name already exists!")
+			return
+	
+		self.chat_alias[self.current_chat]=new_name
+
+	def quit(self)->None:
+		self.socket.shutdown(1)
+		self.socket.close()
+
+		system(self.CLEAR_COMMAND)
+		
+		print("############  ---  SEE YOU LATER  ---  ############")
+
+		self.__save_all_chat_data()
+
+
 	def __create_new_chat(self)->None:
 		new_chat_key=input("Enter here the reciepients public key: ")
 		if new_chat_key in self.chats: 
-			print("Already exists!")
+			print("already exists!")
 			return
+
+		if not self.__regen_public_key(new_chat_key): return
 
 		self.chats[new_chat_key]=[]
 
@@ -208,7 +294,7 @@ class Client:
 
 	def __gen_chat_name(self, chat:str)->str:
 		if chat in self.chat_alias: return self.chat_alias[chat]
-		return "0x"+chat[:8]+"..."
+		return "0x"+chat[:5]+"..."
 
 	def __get_matching_chat(self, piece:str)->str|None:
 		chat_id:str=piece.strip("0x").strip("...")
@@ -222,7 +308,9 @@ class Client:
 		print(f"{datetime.fromtimestamp(timestamp)} - [{self.__gen_chat_name(source)}]:",message,"\n")
 
 	def __save_unread_message(self, timestamp, source, message)->None:
-		if source not in self.unread_chats:  self.unread_chats[source]=Queue()
+		if source not in self.unread_chats: 
+			self.unread_chats[source]=Queue()
+			if source not in self.chats: self.chats[source]=[]
 		self.unread_chats[source].put([timestamp, source, message])
 
 	def __load_messages(self)->None:
@@ -245,30 +333,48 @@ class Client:
 
 		self.commands[command.strip("!")]()
 
-	def delete_chat(self)->None:
-		if not self.current_chat: 
-			self.chats={}
-			self.unread_chats={}
-		else: self.chats[self.current_chat]=[]
+	def __load_all_chat_data(self):
+		if not exists(self.CHATS_FOLDER): return
 
-		self.pick_chat()
+		self.chats=self.__file2Json(self.OPENED_CHATS_JSON)
+		self.unread_chat=self.__file2Json(self.UNREAD_CHATS_JSON)
+		self.chat_alias=self.__file2Json(self.CHAT_NAMES_JSON)
 
-	def rename(self)->None:
-		if not self.current_chat: 
-			print("Must be inside a chat.")
-			return
-		new_name:str=input("[NEW NAME FOR CURRENT CHAT]: ")
-		if new_name in self.chat_alias: 
-			print("Name already exists!")
-			return
-	
-		self.chat_alias[new_name]=self.current_chat
+	def __save_all_chat_data(self):
+		if not exists(self.CHATS_FOLDER): mkdir(self.CHATS_FOLDER)
 
+		self.__json2file(self.chats, self.OPENED_CHATS_JSON)
+		self.__json2file(self.unread_chats, self.UNREAD_CHATS_JSON)
+		self.__json2file(self.chat_alias, self.CHAT_NAMES_JSON)
+
+	def __json2file(self, data, path:str)->None:
+		with open(path, "w") as f:
+			json.dump(data, f)
+
+	def __file2Json(self, path:str):
+		if not exists(path): return {}
+		with open(path, "r") as f:
+			return json.loads(f.read())
+
+
+	def __get_user_input(self)->str|None:
+		message:str=input("> ")
+		if len(message)+self.SIZE_NON_TEXT_MSG_COMPONENTS > self.KEY_SIZE:
+			print(f"[ ERROR: message is too large ({len(message)}chars). maximum {self.KEY_SIZE-self.SIZE_NON_TEXT_MSG_COMPONENTS} characters. ]")
+			return None
+		return message
+			
+
+	############################################
+
+
+	############################################
+	############################################
 
 	def start(self)->None:
 		if not self.load_keys():  self.gen_keys()
 
-		self.connect()
+		if not self.connect(): return
 		self.login()
 		
 		listener:Thread=Thread(target=self.listener)
@@ -279,33 +385,32 @@ class Client:
 
 	def listener(self)->None:
 		while self.connected:
-			data:tuple|None=self.receive()
-			if not data: break
+			data:tuple|None|bool=self.receive()
+			if data==None: break
+			if data is bool: continue
 
-			source, message, timestamp =data
-			if self.current_chat==source: 
+			source, message, timestamp =data # type: ignore
+			if self.current_chat==source:
 				self.__print_message(timestamp, source, message)
 				self.chats[source].append((timestamp, source, message))
-
 			else: self.__save_unread_message(timestamp, source, message)
-			
-	
+
 	def speaker(self)->None:
 		self.pick_chat()
 
 		while self.connected:
-			pprint(self.chats)
-			pprint(self.unread_chats)
+			message:str|None=self.__get_user_input()
 
-			message:str=input("> ")
-
-			if message.startswith(self.COMMAND_KEY) or not self.current_chat:
+			if not message: continue
+			elif message.startswith(self.COMMAND_KEY) or not self.current_chat:
 				self.__manage_command(message)
 			else:
 				self.send(self.current_chat, message)
 				self.chats[self.current_chat].append((time.time(), "YOU", message))
 
 
+	############################################
+	############################################
 
 if __name__=="__main__":
 	c=Client()
