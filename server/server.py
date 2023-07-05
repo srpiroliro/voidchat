@@ -39,8 +39,6 @@ class ClientThread(threading.Thread):
 		self.conn.sendall(data.encode(ENCODING))
 
 	def run(self)->None:
-		print("[NEW CONNECTION]:", self.addr)
-
 		self.connected=self.__login()
 
 		if self.connected:
@@ -48,10 +46,8 @@ class ClientThread(threading.Thread):
 			self.__send_unsent_messages()
 
 		while self.connected:
-			raw_data=self.conn.recv(MESSAGE_SIZE)
-			if not raw_data: 
-				print("no data here")
-				break
+			raw_data=self.__try_receive()
+			if not raw_data: break
 			data=raw_data.decode()
 
 			try:  source, destionation, _ =self.__parse_message(data)
@@ -66,7 +62,17 @@ class ClientThread(threading.Thread):
 					unsent_chats[destionation].put(data)
 
 		self.conn.close()
-		print("[DISCONNECTED]")
+		print("[DISCONNECTED]\n")
+
+	def __try_receive(self)->bytes|None:
+		try:
+			raw_data=self.conn.recv(MESSAGE_SIZE)
+			return raw_data
+		except Exception as e: 
+			self.connected=False
+			print(f"[ERROR] receiving error ({e})")
+
+			return None
 
 
 	def __parse_message(self, message:str)->tuple[str,str,str]:
