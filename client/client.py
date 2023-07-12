@@ -38,7 +38,7 @@ class Client:
 
 	SIZE_NON_TEXT_MSG_COMPONENTS=56
 
-	KEY_SIZE:int=256
+	KEY_SIZE:int=1024
 	KEYS_FOLDER:str="keys"
 	PUB_KEY_PATH:str=f"{KEYS_FOLDER}/public_key.pem"
 	PRIV_KEY_PATH:str=f"{KEYS_FOLDER}/private_key.pem"
@@ -88,10 +88,15 @@ class Client:
 		if not exists(self.KEYS_FOLDER): 
 			mkdir(self.KEYS_FOLDER)
 
-		pub, priv = rsa.newkeys(self.KEY_SIZE)
+		self.public_key, self.private_key = rsa.newkeys(self.KEY_SIZE)
 
-		with open(self.PUB_KEY_PATH, 'wb') as f: f.write(pub.save_pkcs1('PEM'))
-		with open(self.PRIV_KEY_PATH, 'wb') as f: f.write(priv.save_pkcs1('PEM'))
+		with open(self.PUB_KEY_PATH, 'wb') as f: 
+			f.write(self.public_key.save_pkcs1())
+
+		with open(self.PRIV_KEY_PATH, 'wb') as f: 
+			f.write(self.private_key.save_pkcs1())
+
+		self.load_keys()
 
 	def load_keys(self)->bool:
 		try:
